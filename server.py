@@ -34,7 +34,7 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "7860"))
 ESP32_INPUT_SAMPLE_RATE = int(os.getenv("ESP32_INPUT_SAMPLE_RATE", "16000"))
 ESP32_OUTPUT_SAMPLE_RATE = int(os.getenv("ESP32_OUTPUT_SAMPLE_RATE", "24000"))
-DEFAULT_ICE_SERVERS = [{"urls": ["stun:stun.l.google.com:19302"]}]
+DEFAULT_ICE_SERVER_URLS = ["stun:stun.l.google.com:19302"]
 
 
 def create_browser_transport(connection: SmallWebRTCConnection) -> SmallWebRTCTransport:
@@ -100,7 +100,7 @@ def create_app() -> FastAPI:
         return FileResponse(path=file_path, filename=file_path.name)
 
     small_webrtc_handler = SmallWebRTCRequestHandler(
-        ice_servers=DEFAULT_ICE_SERVERS,
+        ice_servers=DEFAULT_ICE_SERVER_URLS,
         esp32_mode=False,
         host=HOST,
     )
@@ -135,7 +135,7 @@ def create_app() -> FastAPI:
 
         result: StartBotResult = {
             "sessionId": session_id,
-            "iceConfig": IceConfig(iceServers=DEFAULT_ICE_SERVERS),
+            "iceConfig": IceConfig(iceServers=[IceServer(urls=DEFAULT_ICE_SERVER_URLS)]),
         }
         return result
 
