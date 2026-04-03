@@ -14,6 +14,7 @@ from loguru import logger
 
 logger.info("Loading Silero VAD model...")
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.params import VADParams
 
 logger.info("Silero VAD model loaded")
 
@@ -124,7 +125,7 @@ class RealtimeOutputControlProcessor(FrameProcessor):
 def create_esp32_auth_message() -> dict:
     return {
         "type": "auth",
-        "volume_control": int(os.getenv("ESP32_DEFAULT_VOLUME", "70")),
+        "volume_control": int(os.getenv("ESP32_DEFAULT_VOLUME", "100")),
         "pitch_factor": float(os.getenv("ESP32_DEFAULT_PITCH_FACTOR", "1.0")),
         "is_ota": False,
         "is_reset": False,
@@ -160,7 +161,7 @@ async def run_bot_session(
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.4))),
     )
 
     processors = [
