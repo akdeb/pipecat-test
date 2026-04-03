@@ -1,4 +1,4 @@
-"""Custom ESP32 WebSocket transport for raw PCM input and Opus output."""
+"""Custom websocket transports for raw PCM input with ESP32/browser outputs."""
 
 from __future__ import annotations
 
@@ -29,8 +29,8 @@ from pipecat.transports.websocket.fastapi import (
 )
 
 
-class Esp32FrameSerializer(FrameSerializer):
-    """Deserialize raw PCM and JSON text messages for the ESP32 route."""
+class RawPCMFrameSerializer(FrameSerializer):
+    """Deserialize raw PCM and JSON control messages."""
 
     def __init__(self, input_sample_rate: int, input_channels: int = 1):
         super().__init__()
@@ -56,7 +56,7 @@ class Esp32FrameSerializer(FrameSerializer):
             try:
                 message = json.loads(data)
             except json.JSONDecodeError:
-                logger.warning("Ignoring non-JSON ESP32 websocket text frame")
+                logger.warning("Ignoring non-JSON websocket text frame")
                 return None
             return InputTransportMessageFrame(message=message)
 
@@ -65,8 +65,6 @@ class Esp32FrameSerializer(FrameSerializer):
 
 @dataclass
 class OpusEncoder:
-    """Chunking PCM audio into Opus packets for the ESP32 output stream."""
-
     sample_rate: int = 24000
     channels: int = 1
     bit_rate: int = 24000
@@ -83,9 +81,6 @@ class OpusEncoder:
         self._bytes_per_frame = self._frame_size * self.channels * 2
         self._buffer = bytearray()
 
-    def reset(self):
-        self._buffer.clear()
-
     def encode(self, pcm_audio: bytes) -> list[bytes]:
         packets: list[bytes] = []
         self._buffer.extend(pcm_audio)
@@ -97,13 +92,31 @@ class OpusEncoder:
             samples = np.frombuffer(chunk, dtype=np.int16).reshape(self.channels, -1)
             frame = av.AudioFrame.from_ndarray(samples, format="s16", layout=self._codec.layout.name)
             frame.sample_rate = self.sample_rate
-
             packets.extend(bytes(packet) for packet in self._codec.encode(frame))
 
         return packets
 
 
-class Esp32WebsocketOutputTransport(FastAPIWebsocketOutputTransport):
+class RawPCMWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
+    async def send_message(
+        self, frame: OutputTransportMessageFrame | OutputTransportMessageUrgentFrame
+    ):
+        if self._client.is_closing or not self._client.is_connected:
+            return
+        payload = await self._params.serializer.serialize(frame) if self._params.serializer else None
+        if payload:
+            await self._client.send(payload)
+
+    async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
+        if self._client.is_closing or not self._client.is_connected:
+            return False
+
+        await self._client.send(frame.audio)
+        await self._write_audio_sleep()
+        return True
+
+
+class OpusWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
     def __init__(self, transport, client, params, **kwargs):
         super().__init__(transport, client, params, **kwargs)
         self._encoder = OpusEncoder(
@@ -117,7 +130,6 @@ class Esp32WebsocketOutputTransport(FastAPIWebsocketOutputTransport):
     ):
         if self._client.is_closing or not self._client.is_connected:
             return
-
         payload = await self._params.serializer.serialize(frame) if self._params.serializer else None
         if payload:
             await self._client.send(payload)
@@ -126,12 +138,6 @@ class Esp32WebsocketOutputTransport(FastAPIWebsocketOutputTransport):
         if self._client.is_closing or not self._client.is_connected:
             return False
 
-        frame = OutputAudioRawFrame(
-            audio=frame.audio,
-            sample_rate=self.sample_rate,
-            num_channels=self._params.audio_out_channels,
-        )
-
         for packet in self._encoder.encode(frame.audio):
             await self._client.send(packet)
 
@@ -139,7 +145,9 @@ class Esp32WebsocketOutputTransport(FastAPIWebsocketOutputTransport):
         return True
 
 
-class Esp32WebsocketTransport(FastAPIWebsocketTransport):
+class BaseRawWebsocketTransport(FastAPIWebsocketTransport):
+    output_transport_cls = RawPCMWebsocketOutputTransport
+
     def __init__(
         self,
         websocket: WebSocket,
@@ -148,7 +156,6 @@ class Esp32WebsocketTransport(FastAPIWebsocketTransport):
         output_name: str | None = None,
     ):
         super(FastAPIWebsocketTransport, self).__init__(input_name=input_name, output_name=output_name)
-
         self._params = params
         self._callbacks = FastAPIWebsocketCallbacks(
             on_client_connected=self._on_client_connected,
@@ -159,10 +166,15 @@ class Esp32WebsocketTransport(FastAPIWebsocketTransport):
         self._input = FastAPIWebsocketInputTransport(
             self, self._client, self._params, name=self._input_name
         )
-        self._output = Esp32WebsocketOutputTransport(
-            self, self._client, self._params, name=self._output_name
-        )
-
+        self._output = self.output_transport_cls(self, self._client, self._params, name=self._output_name)
         self._register_event_handler("on_client_connected")
         self._register_event_handler("on_client_disconnected")
         self._register_event_handler("on_session_timeout")
+
+
+class Esp32WebsocketTransport(BaseRawWebsocketTransport):
+    output_transport_cls = OpusWebsocketOutputTransport
+
+
+class BrowserWebsocketTransport(BaseRawWebsocketTransport):
+    output_transport_cls = RawPCMWebsocketOutputTransport

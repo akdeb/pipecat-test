@@ -2,7 +2,7 @@
 
 This workspace now exposes two access paths to the same Pipecat bot logic:
 
-- Browser WebRTC client at `/client`
+- Browser WebSocket test UI at `/browser`
 - ESP32 WebSocket client at `/ws/esp32`
 - Container entrypoint via `uv run server.py`
 
@@ -34,7 +34,7 @@ This workspace now exposes two access paths to the same Pipecat bot logic:
 
 5. Browser client:
 
-   [http://localhost:7860/client](http://localhost:7860/client)
+   [http://localhost:7860/browser](http://localhost:7860/browser)
 
 6. ESP32 client:
 
@@ -43,7 +43,7 @@ This workspace now exposes two access paths to the same Pipecat bot logic:
 ## Notes
 
 - The first run can take around 20 seconds while Pipecat loads models and imports.
-- The browser route uses Pipecat's SmallWebRTC transport and prebuilt client UI.
+- The browser route uses plain WebSocket with raw PCM audio in/out.
 - The ESP32 route accepts raw PCM audio input and returns Opus packets over WSS.
 - The ESP32 route also emits JSON control messages such as `RESPONSE.CREATED`,
   `AUDIO.COMMITTED`, and `RESPONSE.COMPLETE`.

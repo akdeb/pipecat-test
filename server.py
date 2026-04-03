@@ -1,48 +1,212 @@
-"""Local multi-transport Pipecat server for browser WebRTC and ESP32 WSS."""
+"""Multi-transport Pipecat server for browser and ESP32 over WebSocket."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import uuid
-from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import Any, Dict, List, Optional, TypedDict, Union
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, WebSocket
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from loguru import logger
-from pipecat_ai_small_webrtc_prebuilt.frontend import SmallWebRTCPrebuiltUI
+from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 
 from bot import create_esp32_auth_message, run_bot_session
-from esp32_transport import Esp32FrameSerializer, Esp32WebsocketTransport
-from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
-from pipecat.transports.smallwebrtc.request_handler import (
-    IceCandidate,
-    SmallWebRTCPatchRequest,
-    SmallWebRTCRequest,
-    SmallWebRTCRequestHandler,
-)
-from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
-from pipecat.transports.smallwebrtc.transport import TransportParams as SmallWebRTCParams
-from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
+from esp32_transport import BrowserWebsocketTransport, Esp32WebsocketTransport, RawPCMFrameSerializer
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "7860"))
+BROWSER_INPUT_SAMPLE_RATE = int(os.getenv("BROWSER_INPUT_SAMPLE_RATE", "16000"))
 ESP32_INPUT_SAMPLE_RATE = int(os.getenv("ESP32_INPUT_SAMPLE_RATE", "16000"))
-ESP32_OUTPUT_SAMPLE_RATE = int(os.getenv("ESP32_OUTPUT_SAMPLE_RATE", "24000"))
-DEFAULT_ICE_SERVER_URLS = ["stun:stun.l.google.com:19302"]
+AUDIO_OUTPUT_SAMPLE_RATE = int(os.getenv("AUDIO_OUTPUT_SAMPLE_RATE", "24000"))
+
+BROWSER_HTML = """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pipecat Browser WS</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; background: #0e0f14; color: #f5f7fb; }
+    .wrap { max-width: 920px; margin: 0 auto; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    button { padding: 10px 16px; border-radius: 10px; border: 0; cursor: pointer; }
+    #connect { background: #3b82f6; color: white; }
+    #disconnect { background: #374151; color: white; }
+    #status { margin-left: 8px; opacity: 0.85; }
+    #log { margin-top: 16px; background: #161925; border-radius: 12px; padding: 12px; height: 340px; overflow: auto; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Pipecat Browser WebSocket Test</h1>
+    <div class="row">
+      <button id="connect">Connect</button>
+      <button id="disconnect">Disconnect</button>
+      <span id="status">idle</span>
+    </div>
+    <div id="log"></div>
+  </div>
+  <script>
+    const logEl = document.getElementById("log");
+    const statusEl = document.getElementById("status");
+    const log = (...args) => {
+      const line = args.map(x => typeof x === "string" ? x : JSON.stringify(x)).join(" ");
+      logEl.textContent += line + "\\n";
+      logEl.scrollTop = logEl.scrollHeight;
+      console.log(...args);
+    };
+
+    let ws = null;
+    let audioContext = null;
+    let mediaStream = null;
+    let sourceNode = null;
+    let processorNode = null;
+    let outputNode = null;
+    let outputQueue = [];
+    let connected = false;
+
+    function setStatus(v) { statusEl.textContent = v; }
+
+    function downsampleBuffer(buffer, inputRate, outputRate) {
+      if (outputRate === inputRate) return buffer;
+      const ratio = inputRate / outputRate;
+      const newLength = Math.round(buffer.length / ratio);
+      const result = new Float32Array(newLength);
+      let offsetResult = 0;
+      let offsetBuffer = 0;
+      while (offsetResult < result.length) {
+        const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+        let accum = 0, count = 0;
+        for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+          accum += buffer[i];
+          count++;
+        }
+        result[offsetResult] = accum / count;
+        offsetResult++;
+        offsetBuffer = nextOffsetBuffer;
+      }
+      return result;
+    }
+
+    function floatTo16BitPCM(float32Array) {
+      const buffer = new ArrayBuffer(float32Array.length * 2);
+      const view = new DataView(buffer);
+      for (let i = 0; i < float32Array.length; i++) {
+        let s = Math.max(-1, Math.min(1, float32Array[i]));
+        view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      }
+      return buffer;
+    }
+
+    function int16ToFloat32(int16Array) {
+      const out = new Float32Array(int16Array.length);
+      for (let i = 0; i < int16Array.length; i++) out[i] = int16Array[i] / 32768;
+      return out;
+    }
+
+    function setupPlayback(ctx) {
+      outputNode = ctx.createScriptProcessor(4096, 1, 1);
+      outputNode.onaudioprocess = (event) => {
+        const out = event.outputBuffer.getChannelData(0);
+        out.fill(0);
+        let offset = 0;
+        while (offset < out.length && outputQueue.length > 0) {
+          const chunk = outputQueue[0];
+          const copy = Math.min(chunk.length, out.length - offset);
+          out.set(chunk.subarray(0, copy), offset);
+          offset += copy;
+          if (copy < chunk.length) {
+            outputQueue[0] = chunk.subarray(copy);
+          } else {
+            outputQueue.shift();
+          }
+        }
+      };
+      outputNode.connect(ctx.destination);
+    }
+
+    async function connect() {
+      if (connected) return;
+      setStatus("requesting mic");
+      audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+      setupPlayback(audioContext);
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      sourceNode = audioContext.createMediaStreamSource(mediaStream);
+      processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+      processorNode.onaudioprocess = (event) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const input = event.inputBuffer.getChannelData(0);
+        const downsampled = downsampleBuffer(input, audioContext.sampleRate, 16000);
+        ws.send(floatTo16BitPCM(downsampled));
+      };
+      sourceNode.connect(processorNode);
+      processorNode.connect(audioContext.destination);
+
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${proto}://${location.host}/ws/browser`);
+      ws.binaryType = "arraybuffer";
+
+      ws.onopen = () => {
+        connected = true;
+        setStatus("connected");
+        log("socket open");
+      };
+      ws.onclose = () => {
+        connected = false;
+        setStatus("closed");
+        log("socket closed");
+      };
+      ws.onerror = (e) => {
+        setStatus("error");
+        log("socket error", e.type || "error");
+      };
+      ws.onmessage = (event) => {
+        if (typeof event.data === "string") {
+          log("message", event.data);
+          return;
+        }
+        const int16 = new Int16Array(event.data);
+        outputQueue.push(int16ToFloat32(int16));
+      };
+      setStatus("connecting");
+    }
+
+    function disconnect() {
+      if (ws) ws.close();
+      if (processorNode) processorNode.disconnect();
+      if (sourceNode) sourceNode.disconnect();
+      if (outputNode) outputNode.disconnect();
+      if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+      if (audioContext) audioContext.close();
+      ws = null;
+      processorNode = null;
+      sourceNode = null;
+      outputNode = null;
+      mediaStream = null;
+      audioContext = null;
+      outputQueue = [];
+      connected = false;
+      setStatus("idle");
+    }
+
+    document.getElementById("connect").onclick = connect;
+    document.getElementById("disconnect").onclick = disconnect;
+  </script>
+</body>
+</html>"""
 
 
-def create_browser_transport(connection: SmallWebRTCConnection) -> SmallWebRTCTransport:
-    return SmallWebRTCTransport(
-        webrtc_connection=connection,
-        params=SmallWebRTCParams(
+def create_browser_transport(websocket: WebSocket) -> BrowserWebsocketTransport:
+    return BrowserWebsocketTransport(
+        websocket=websocket,
+        params=FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
+            audio_in_sample_rate=BROWSER_INPUT_SAMPLE_RATE,
+            audio_out_sample_rate=AUDIO_OUTPUT_SAMPLE_RATE,
+            serializer=RawPCMFrameSerializer(input_sample_rate=BROWSER_INPUT_SAMPLE_RATE),
         ),
     )
 
@@ -54,8 +218,8 @@ def create_esp32_transport(websocket: WebSocket) -> Esp32WebsocketTransport:
             audio_in_enabled=True,
             audio_out_enabled=True,
             audio_in_sample_rate=ESP32_INPUT_SAMPLE_RATE,
-            audio_out_sample_rate=ESP32_OUTPUT_SAMPLE_RATE,
-            serializer=Esp32FrameSerializer(input_sample_rate=ESP32_INPUT_SAMPLE_RATE),
+            audio_out_sample_rate=AUDIO_OUTPUT_SAMPLE_RATE,
+            serializer=RawPCMFrameSerializer(input_sample_rate=ESP32_INPUT_SAMPLE_RATE),
         ),
     )
 
@@ -70,134 +234,38 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    class IceServer(TypedDict, total=False):
-        urls: Union[str, List[str]]
-
-    class IceConfig(TypedDict):
-        iceServers: List[IceServer]
-
-    class StartBotResult(TypedDict, total=False):
-        sessionId: str
-        iceConfig: Optional[IceConfig]
-
-    active_sessions: Dict[str, Dict[str, Any]] = {}
-    background_session_tasks: set[asyncio.Task] = set()
-    app.mount("/client", SmallWebRTCPrebuiltUI)
-
     @app.get("/", include_in_schema=False)
     async def root_redirect():
-        return RedirectResponse(url="/client/")
+        return RedirectResponse(url="/browser")
+
+    @app.get("/browser", response_class=HTMLResponse)
+    async def browser_page():
+        return HTMLResponse(BROWSER_HTML)
 
     @app.get("/healthz")
     async def healthcheck():
         return {"ok": True}
 
-    @app.get("/files/{filename:path}")
-    async def download_file(filename: str):
-        file_path = Path(filename)
-        if not file_path.exists():
-            raise HTTPException(404)
-        return FileResponse(path=file_path, filename=file_path.name)
-
-    small_webrtc_handler = SmallWebRTCRequestHandler(
-        ice_servers=DEFAULT_ICE_SERVER_URLS,
-        esp32_mode=False,
-        host=HOST,
-    )
-
-    @app.post("/api/offer")
-    async def offer(request: SmallWebRTCRequest, background_tasks: BackgroundTasks):
-        async def webrtc_connection_callback(connection: SmallWebRTCConnection):
-            transport = create_browser_transport(connection)
-            task = asyncio.create_task(run_bot_session(transport, "browser", False))
-            background_session_tasks.add(task)
-            task.add_done_callback(background_session_tasks.discard)
-
-        return await small_webrtc_handler.handle_web_request(
-            request=request,
-            webrtc_connection_callback=webrtc_connection_callback,
-        )
-
-    @app.patch("/api/offer")
-    async def ice_candidate(request: SmallWebRTCPatchRequest):
-        await small_webrtc_handler.handle_patch_request(request)
-        return {"status": "success"}
-
-    @app.post("/start")
-    async def rtvi_start(request: Request):
-        try:
-            request_data = await request.json()
-        except Exception:
-            request_data = {}
-
-        session_id = str(uuid.uuid4())
-        active_sessions[session_id] = request_data.get("body", {})
-
-        result: StartBotResult = {
-            "sessionId": session_id,
-            "iceConfig": IceConfig(iceServers=[IceServer(urls=DEFAULT_ICE_SERVER_URLS)]),
-        }
-        return result
-
-    @app.api_route(
-        "/sessions/{session_id}/{path:path}",
-        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    )
-    async def proxy_request(
-        session_id: str, path: str, request: Request, background_tasks: BackgroundTasks
-    ):
-        active_session = active_sessions.get(session_id)
-        if active_session is None:
-            return Response(content="Invalid or not-yet-ready session_id", status_code=404)
-
-        if path.endswith("api/offer"):
-            try:
-                request_data = await request.json()
-                if request.method == "POST":
-                    webrtc_request = SmallWebRTCRequest(
-                        sdp=request_data["sdp"],
-                        type=request_data["type"],
-                        pc_id=request_data.get("pc_id"),
-                        restart_pc=request_data.get("restart_pc"),
-                        request_data=request_data.get("request_data")
-                        or request_data.get("requestData")
-                        or active_session,
-                    )
-                    return await offer(webrtc_request, background_tasks)
-                if request.method == "PATCH":
-                    patch_request = SmallWebRTCPatchRequest(
-                        pc_id=request_data["pc_id"],
-                        candidates=[IceCandidate(**c) for c in request_data.get("candidates", [])],
-                    )
-                    return await ice_candidate(patch_request)
-            except Exception as exc:
-                logger.error(f"Failed to parse WebRTC request: {exc}")
-                return Response(content="Invalid WebRTC request", status_code=400)
-
-        return Response(status_code=200)
+    @app.websocket("/ws/browser")
+    async def browser_websocket(websocket: WebSocket):
+        await websocket.accept()
+        logger.info("Browser websocket connected")
+        transport = create_browser_transport(websocket)
+        await run_bot_session(transport, "browser", False)
 
     @app.websocket("/ws/esp32")
     async def esp32_websocket(websocket: WebSocket):
         await websocket.accept()
-
         logger.info(
             "ESP32 websocket connected: mac={} rssi={} auth={}",
             websocket.headers.get("x-device-mac", "unknown"),
             websocket.headers.get("x-wifi-rssi", "unknown"),
             "yes" if websocket.headers.get("authorization") else "no",
         )
-
         await websocket.send_text(json.dumps(create_esp32_auth_message()))
-
         transport = create_esp32_transport(websocket)
         await run_bot_session(transport, "esp32", False)
 
-    @asynccontextmanager
-    async def app_lifespan(app: FastAPI):
-        yield
-        await small_webrtc_handler.close()
-
-    app.router.lifespan_context = app_lifespan
     return app
 
 
