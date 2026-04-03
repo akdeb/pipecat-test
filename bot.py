@@ -14,7 +14,7 @@ from loguru import logger
 
 logger.info("Loading Silero VAD model...")
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.params import VADParams
+from pipecat.audio.vad.vad_analyzer import VADParams
 
 logger.info("Silero VAD model loaded")
 
