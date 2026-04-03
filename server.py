@@ -34,6 +34,7 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "7860"))
 ESP32_INPUT_SAMPLE_RATE = int(os.getenv("ESP32_INPUT_SAMPLE_RATE", "16000"))
 ESP32_OUTPUT_SAMPLE_RATE = int(os.getenv("ESP32_OUTPUT_SAMPLE_RATE", "24000"))
+DEFAULT_ICE_SERVERS = [{"urls": ["stun:stun.l.google.com:19302"]}]
 
 
 def create_browser_transport(connection: SmallWebRTCConnection) -> SmallWebRTCTransport:
@@ -98,7 +99,11 @@ def create_app() -> FastAPI:
             raise HTTPException(404)
         return FileResponse(path=file_path, filename=file_path.name)
 
-    small_webrtc_handler = SmallWebRTCRequestHandler(esp32_mode=False, host=HOST)
+    small_webrtc_handler = SmallWebRTCRequestHandler(
+        ice_servers=DEFAULT_ICE_SERVERS,
+        esp32_mode=False,
+        host=HOST,
+    )
 
     @app.post("/api/offer")
     async def offer(request: SmallWebRTCRequest, background_tasks: BackgroundTasks):
@@ -128,11 +133,10 @@ def create_app() -> FastAPI:
         session_id = str(uuid.uuid4())
         active_sessions[session_id] = request_data.get("body", {})
 
-        result: StartBotResult = {"sessionId": session_id}
-        if request_data.get("enableDefaultIceServers"):
-            result["iceConfig"] = IceConfig(
-                iceServers=[IceServer(urls=["stun:stun.l.google.com:19302"])]
-            )
+        result: StartBotResult = {
+            "sessionId": session_id,
+            "iceConfig": IceConfig(iceServers=DEFAULT_ICE_SERVERS),
+        }
         return result
 
     @app.api_route(
