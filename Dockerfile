@@ -3,6 +3,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PORT=7860
+ENV PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app
 
@@ -22,4 +23,4 @@ COPY bot.py server.py esp32_transport.py ./
 
 EXPOSE 7860
 
-CMD ["uv", "run", "server.py"]
+CMD ["python", "server.py"]
