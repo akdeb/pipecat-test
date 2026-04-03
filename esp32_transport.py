@@ -68,6 +68,7 @@ class OpusEncoder:
     sample_rate: int = 24000
     channels: int = 1
     bit_rate: int = 24000
+    frame_duration_ms: int = 120
 
     def __post_init__(self):
         self._codec = av.CodecContext.create("libopus", "w")
@@ -76,8 +77,12 @@ class OpusEncoder:
         self._codec.layout = "mono" if self.channels == 1 else "stereo"
         self._codec.format = "s16"
         self._codec.bit_rate = self.bit_rate
+        self._codec.options = {
+            "application": "voip",
+            "frame_duration": str(self.frame_duration_ms),
+        }
         self._codec.open()
-        self._frame_size = self._codec.frame_size or (self.sample_rate // 50)
+        self._frame_size = int(self.sample_rate * self.frame_duration_ms / 1000)
         self._bytes_per_frame = self._frame_size * self.channels * 2
         self._buffer = bytearray()
 
@@ -95,6 +100,24 @@ class OpusEncoder:
             packets.extend(bytes(packet) for packet in self._codec.encode(frame))
 
         return packets
+
+    def flush(self, pad_final_frame: bool = False) -> list[bytes]:
+        if not self._buffer:
+            return []
+
+        if not pad_final_frame:
+            self._buffer.clear()
+            return []
+
+        padded = bytes(self._buffer) + b"\x00" * (self._bytes_per_frame - len(self._buffer))
+        self._buffer.clear()
+        return self.encode(padded)
+
+    def reset(self):
+        self._buffer.clear()
+
+    def close(self):
+        self._buffer.clear()
 
 
 class RawPCMWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
@@ -130,6 +153,18 @@ class OpusWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
     ):
         if self._client.is_closing or not self._client.is_connected:
             return
+
+        message = frame.message if isinstance(frame.message, dict) else {}
+        msg = message.get("msg")
+
+        if msg == "RESPONSE.CREATED":
+            self._encoder.reset()
+        elif msg == "RESPONSE.COMPLETE":
+            for packet in self._encoder.flush(pad_final_frame=True):
+                await self._client.send(packet)
+        elif msg == "RESPONSE.ERROR":
+            self._encoder.reset()
+
         payload = await self._params.serializer.serialize(frame) if self._params.serializer else None
         if payload:
             await self._client.send(payload)
