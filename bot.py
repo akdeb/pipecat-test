@@ -20,10 +20,14 @@ logger.info("Silero VAD model loaded")
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
+    EmulateUserStoppedSpeakingFrame,
     ErrorFrame,
     Frame,
+    InputTransportMessageFrame,
+    InterruptionFrame,
     LLMRunFrame,
     OutputTransportMessageFrame,
+    STTMuteFrame,
     UserStoppedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
@@ -46,11 +50,26 @@ logger.info("All components loaded successfully")
 load_dotenv(override=True)
 
 
-class Esp32ControlMessageProcessor(FrameProcessor):
-    """Translate pipeline state changes into the ESP32's existing JSON control protocol."""
+class RealtimeControlProcessor(FrameProcessor):
+    """Bridge the old device/browser websocket control protocol into Pipecat frames."""
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
+
+        if isinstance(frame, InputTransportMessageFrame):
+            message = frame.message if isinstance(frame.message, dict) else {}
+            msg_type = message.get("type")
+            msg = message.get("msg")
+
+            if msg_type == "instruction" and msg == "end_of_speech":
+                await self.push_frame(EmulateUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+                await self.push_frame(STTMuteFrame(mute=True), FrameDirection.DOWNSTREAM)
+                return
+
+            if msg_type == "instruction" and msg == "INTERRUPT":
+                await self.push_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
+                await self.push_frame(STTMuteFrame(mute=False), FrameDirection.DOWNSTREAM)
+                return
 
         if direction is FrameDirection.DOWNSTREAM:
             if isinstance(frame, (UserStoppedSpeakingFrame, VADUserStoppedSpeakingFrame)):
@@ -59,11 +78,13 @@ class Esp32ControlMessageProcessor(FrameProcessor):
                     direction,
                 )
             elif isinstance(frame, BotStartedSpeakingFrame):
+                await self.push_frame(STTMuteFrame(mute=True), direction)
                 await self.push_frame(
                     OutputTransportMessageFrame(message={"type": "server", "msg": "RESPONSE.CREATED"}),
                     direction,
                 )
             elif isinstance(frame, BotStoppedSpeakingFrame):
+                await self.push_frame(STTMuteFrame(mute=False), direction)
                 await self.push_frame(frame, direction)
                 await self.push_frame(
                     OutputTransportMessageFrame(message={"type": "server", "msg": "RESPONSE.COMPLETE"}),
@@ -71,6 +92,7 @@ class Esp32ControlMessageProcessor(FrameProcessor):
                 )
                 return
             elif isinstance(frame, ErrorFrame):
+                await self.push_frame(STTMuteFrame(mute=False), direction)
                 await self.push_frame(
                     OutputTransportMessageFrame(message={"type": "server", "msg": "RESPONSE.ERROR"}),
                     direction,
@@ -129,8 +151,8 @@ async def run_bot_session(
         tts,
     ]
 
-    if transport_kind == "esp32":
-        processors.append(Esp32ControlMessageProcessor())
+    if transport_kind in {"esp32", "browser"}:
+        processors.append(RealtimeControlProcessor())
 
     processors.extend(
         [
