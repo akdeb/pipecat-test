@@ -29,6 +29,7 @@ from pipecat.frames.frames import (
     OutputAudioRawFrame,
     OutputTransportMessageFrame,
     STTMuteFrame,
+    TTSStoppedFrame,
     UserStoppedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
@@ -99,8 +100,9 @@ class RealtimeOutputControlProcessor(FrameProcessor):
                     OutputTransportMessageFrame(message={"type": "server", "msg": "RESPONSE.CREATED"}),
                     direction,
                 )
-            elif isinstance(frame, BotStoppedSpeakingFrame):
+            elif isinstance(frame, (TTSStoppedFrame, BotStoppedSpeakingFrame)):
                 self._response_started = False
+                logger.debug("Sending RESPONSE.COMPLETE after TTS stop")
                 await self.push_frame(STTMuteFrame(mute=False), direction)
                 await self.push_frame(frame, direction)
                 await self.push_frame(
