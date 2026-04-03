@@ -50,8 +50,8 @@ logger.info("All components loaded successfully")
 load_dotenv(override=True)
 
 
-class RealtimeControlProcessor(FrameProcessor):
-    """Bridge the old device/browser websocket control protocol into Pipecat frames."""
+class RealtimeInputControlProcessor(FrameProcessor):
+    """Bridge incoming websocket control messages into Pipecat frames."""
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -70,6 +70,15 @@ class RealtimeControlProcessor(FrameProcessor):
                 await self.push_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
                 await self.push_frame(STTMuteFrame(mute=False), FrameDirection.DOWNSTREAM)
                 return
+
+        await self.push_frame(frame, direction)
+
+
+class RealtimeOutputControlProcessor(FrameProcessor):
+    """Translate pipeline state changes into the old websocket control protocol."""
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
 
         if direction is FrameDirection.DOWNSTREAM:
             if isinstance(frame, (UserStoppedSpeakingFrame, VADUserStoppedSpeakingFrame)):
@@ -145,21 +154,17 @@ async def run_bot_session(
 
     processors = [
         transport.input(),
+        RealtimeInputControlProcessor(),
         stt,
         user_aggregator,
         llm,
         tts,
     ]
 
+    processors.append(transport.output())
     if transport_kind in {"esp32", "browser"}:
-        processors.append(RealtimeControlProcessor())
-
-    processors.extend(
-        [
-            transport.output(),
-            assistant_aggregator,
-        ]
-    )
+        processors.append(RealtimeOutputControlProcessor())
+    processors.append(assistant_aggregator)
 
     pipeline = Pipeline(processors)
 
