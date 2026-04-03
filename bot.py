@@ -26,6 +26,7 @@ from pipecat.frames.frames import (
     InputTransportMessageFrame,
     InterruptionFrame,
     LLMRunFrame,
+    OutputAudioRawFrame,
     OutputTransportMessageFrame,
     STTMuteFrame,
     UserStoppedSpeakingFrame,
@@ -77,6 +78,10 @@ class RealtimeInputControlProcessor(FrameProcessor):
 class RealtimeOutputControlProcessor(FrameProcessor):
     """Translate pipeline state changes into the old websocket control protocol."""
 
+    def __init__(self):
+        super().__init__()
+        self._response_started = False
+
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
@@ -86,13 +91,16 @@ class RealtimeOutputControlProcessor(FrameProcessor):
                     OutputTransportMessageFrame(message={"type": "server", "msg": "AUDIO.COMMITTED"}),
                     direction,
                 )
-            elif isinstance(frame, BotStartedSpeakingFrame):
+            elif isinstance(frame, OutputAudioRawFrame) and not self._response_started:
+                self._response_started = True
+                logger.debug("Sending RESPONSE.CREATED before first audio packet")
                 await self.push_frame(STTMuteFrame(mute=True), direction)
                 await self.push_frame(
                     OutputTransportMessageFrame(message={"type": "server", "msg": "RESPONSE.CREATED"}),
                     direction,
                 )
             elif isinstance(frame, BotStoppedSpeakingFrame):
+                self._response_started = False
                 await self.push_frame(STTMuteFrame(mute=False), direction)
                 await self.push_frame(frame, direction)
                 await self.push_frame(
@@ -101,6 +109,7 @@ class RealtimeOutputControlProcessor(FrameProcessor):
                 )
                 return
             elif isinstance(frame, ErrorFrame):
+                self._response_started = False
                 await self.push_frame(STTMuteFrame(mute=False), direction)
                 await self.push_frame(
                     OutputTransportMessageFrame(message={"type": "server", "msg": "RESPONSE.ERROR"}),
@@ -161,9 +170,9 @@ async def run_bot_session(
         tts,
     ]
 
-    processors.append(transport.output())
     if transport_kind in {"esp32", "browser"}:
         processors.append(RealtimeOutputControlProcessor())
+    processors.append(transport.output())
     processors.append(assistant_aggregator)
 
     pipeline = Pipeline(processors)
@@ -187,18 +196,7 @@ async def run_bot_session(
                 "content": "Say hello and briefly introduce yourself.",
             }
         )
-        frames = [LLMRunFrame()]
-        if transport_kind == "esp32":
-            frames.insert(
-                0,
-                OutputTransportMessageFrame(
-                    message={
-                        "type": "server",
-                        "msg": "SESSION.CONNECTED",
-                    }
-                ),
-            )
-        await task.queue_frames(frames)
+        await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
