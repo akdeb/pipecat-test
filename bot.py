@@ -9,12 +9,12 @@
 import os
 from typing import Literal
 
+from classic_route import build_classic_route
 from dotenv import load_dotenv
+from gem_live_route import build_gem_live_route
 from loguru import logger
 
 logger.info("Loading Silero VAD model...")
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
 
 logger.info("Silero VAD model loaded")
 
@@ -38,14 +38,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import (
-    LLMContextAggregatorPair,
-    LLMUserAggregatorParams,
-)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.services.cartesia.tts import CartesiaTTSService
-from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import BaseTransport
 
 logger.info("All components loaded successfully")
@@ -143,58 +136,6 @@ def create_esp32_auth_message() -> dict:
     }
 
 
-def create_classic_services():
-    stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
-
-    tts = CartesiaTTSService(
-        api_key=os.getenv("CARTESIA_API_KEY"),
-        settings=CartesiaTTSService.Settings(
-            voice="71a7ad14-091c-4e8e-a314-022ece01c121",
-        ),
-    )
-
-    llm = OpenAILLMService(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        settings=OpenAILLMService.Settings(
-            system_instruction=(
-                "You are a friendly AI assistant. Respond naturally and keep your "
-                "answers conversational."
-            ),
-        ),
-    )
-
-    return stt, llm, tts
-
-
-def create_gemini_live_service():
-    try:
-        from pipecat.services.google.gemini_live import GeminiLiveLLMService
-    except Exception as exc:
-        raise RuntimeError(
-            "Gemini Live route requires pipecat-ai[google]. Add the google extra and redeploy."
-        ) from exc
-
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("Gemini Live route requires GEMINI_API_KEY to be set.")
-
-    voice = os.getenv("GEMINI_LIVE_VOICE", "Charon")
-    model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-2.5-flash-native-audio-preview-12-2025")
-
-    return GeminiLiveLLMService(
-        api_key=api_key,
-        inference_on_context_initialization=False,
-        settings=GeminiLiveLLMService.Settings(
-            model=model,
-            voice=voice,
-            system_instruction=(
-                "You are a friendly AI assistant. Respond naturally and keep your "
-                "answers conversational."
-            ),
-        ),
-    )
-
-
 async def run_bot_session(
     transport: BaseTransport,
     transport_kind: Literal["browser", "esp32"],
@@ -204,31 +145,13 @@ async def run_bot_session(
     logger.info(f"Starting bot session for {transport_kind} via route={voice_route}")
 
     context = LLMContext()
+    input_processor = RealtimeInputControlProcessor(voice_route)
     if voice_route == "gem_live":
-        llm = create_gemini_live_service()
-        user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
-        processors = [
-            transport.input(),
-            RealtimeInputControlProcessor(voice_route),
-            user_aggregator,
-            llm,
-        ]
+        route_processors, assistant_aggregator = build_gem_live_route(input_processor, context)
     else:
-        stt, llm, tts = create_classic_services()
-        user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-            context,
-            user_params=LLMUserAggregatorParams(
-                vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=1))
-            ),
-        )
-        processors = [
-            transport.input(),
-            RealtimeInputControlProcessor(voice_route),
-            stt,
-            user_aggregator,
-            llm,
-            tts,
-        ]
+        route_processors, assistant_aggregator = build_classic_route(input_processor, context)
+
+    processors = [transport.input(), *route_processors]
 
     if transport_kind in {"esp32", "browser"}:
         processors.append(RealtimeOutputControlProcessor())

@@ -22,7 +22,7 @@ This workspace now exposes two access paths to the same Pipecat bot logic:
    - `CARTESIA_API_KEY`
 
    Gemini Live route:
-   - `GEMINI_API_KEY`
+   - `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 
    Route selection:
    - `CURRENT_VOICE_ROUTE=classic` or `CURRENT_VOICE_ROUTE=gem_live`
@@ -61,5 +61,7 @@ This workspace now exposes two access paths to the same Pipecat bot logic:
 - `CURRENT_VOICE_ROUTE=classic` uses `Deepgram + OpenAI + Cartesia`.
 - `CURRENT_VOICE_ROUTE=gem_live` uses Pipecat `GeminiLiveLLMService` for native
   speech-to-speech.
+- Route builders are split into [classic_route.py](/Users/akashdeepdeb/Desktop/Projects/pipecat-test/classic_route.py)
+  and [gem_live_route.py](/Users/akashdeepdeb/Desktop/Projects/pipecat-test/gem_live_route.py).
 - The included [Dockerfile](/Users/akashdeepdeb/Desktop/Projects/pipecat-test/Dockerfile) is
   set up for generic container hosting of this FastAPI app.
