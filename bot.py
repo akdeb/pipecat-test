@@ -25,8 +25,8 @@ from pipecat.frames.frames import (
     ErrorFrame,
     Frame,
     InputTransportMessageFrame,
-    InputTextRawFrame,
     InterruptionFrame,
+    LLMContextFrame,
     LLMRunFrame,
     OutputAudioRawFrame,
     OutputTransportMessageFrame,
@@ -175,9 +175,15 @@ async def run_bot_session(
     async def on_client_connected(transport, client):
         logger.info(f"{transport_kind} client connected")
         if voice_route == "gem_live":
+            context.add_message(
+                {
+                    "role": "user",
+                    "content": "Say hello and briefly introduce yourself.",
+                }
+            )
             await task.queue_frames(
                 [
-                    InputTextRawFrame(text="Say hello and briefly introduce yourself.")
+                    LLMContextFrame(context=context)
                 ]
             )
         else:
