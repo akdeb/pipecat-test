@@ -25,7 +25,7 @@ def build_gem_live_route(input_processor, context: LLMContext):
 
     llm = GeminiLiveLLMService(
         api_key=api_key,
-        inference_on_context_initialization=False,
+        inference_on_context_initialization=True,
         settings=GeminiLiveLLMService.Settings(
             model=model,
             voice=voice,
