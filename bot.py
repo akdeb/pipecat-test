@@ -26,6 +26,7 @@ from pipecat.frames.frames import (
     Frame,
     InputTransportMessageFrame,
     InterruptionFrame,
+    LLMMessagesAppendFrame,
     LLMRunFrame,
     OutputAudioRawFrame,
     OutputTransportMessageFrame,
@@ -173,13 +174,27 @@ async def run_bot_session(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info(f"{transport_kind} client connected")
-        context.add_message(
-            {
-                "role": "developer",
-                "content": "Say hello and briefly introduce yourself.",
-            }
-        )
-        await task.queue_frames([LLMRunFrame()])
+        if voice_route == "gem_live":
+            await task.queue_frames(
+                [
+                    LLMMessagesAppendFrame(
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": "Say hello and briefly introduce yourself.",
+                            }
+                        ]
+                    )
+                ]
+            )
+        else:
+            context.add_message(
+                {
+                    "role": "developer",
+                    "content": "Say hello and briefly introduce yourself.",
+                }
+            )
+            await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
