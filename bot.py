@@ -51,10 +51,15 @@ from pipecat.transports.base_transport import BaseTransport
 logger.info("All components loaded successfully")
 
 load_dotenv(override=True)
+CURRENT_VOICE_ROUTE = os.getenv("CURRENT_VOICE_ROUTE", "classic").strip().lower()
 
 
 class RealtimeInputControlProcessor(FrameProcessor):
     """Bridge incoming websocket control messages into Pipecat frames."""
+
+    def __init__(self, voice_route: str):
+        super().__init__()
+        self._voice_route = voice_route
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -65,13 +70,19 @@ class RealtimeInputControlProcessor(FrameProcessor):
             msg = message.get("msg")
 
             if msg_type == "instruction" and msg == "end_of_speech":
-                await self.push_frame(EmulateUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
-                await self.push_frame(STTMuteFrame(mute=True), FrameDirection.DOWNSTREAM)
+                if self._voice_route == "gem_live":
+                    await self.push_frame(VADUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+                else:
+                    await self.push_frame(
+                        EmulateUserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM
+                    )
+                    await self.push_frame(STTMuteFrame(mute=True), FrameDirection.DOWNSTREAM)
                 return
 
             if msg_type == "instruction" and msg == "INTERRUPT":
                 await self.push_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
-                await self.push_frame(STTMuteFrame(mute=False), FrameDirection.DOWNSTREAM)
+                if self._voice_route != "gem_live":
+                    await self.push_frame(STTMuteFrame(mute=False), FrameDirection.DOWNSTREAM)
                 return
 
         await self.push_frame(frame, direction)
@@ -132,13 +143,7 @@ def create_esp32_auth_message() -> dict:
     }
 
 
-async def run_bot_session(
-    transport: BaseTransport,
-    transport_kind: Literal["browser", "esp32"],
-    handle_sigint: bool = False,
-):
-    logger.info(f"Starting bot session for {transport_kind}")
-
+def create_classic_services():
     stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
 
     tts = CartesiaTTSService(
@@ -158,20 +163,72 @@ async def run_bot_session(
         ),
     )
 
-    context = LLMContext()
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-        context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=1))),
+    return stt, llm, tts
+
+
+def create_gemini_live_service():
+    try:
+        from pipecat.services.google.gemini_live import GeminiLiveLLMService
+    except Exception as exc:
+        raise RuntimeError(
+            "Gemini Live route requires pipecat-ai[google]. Add the google extra and redeploy."
+        ) from exc
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("Gemini Live route requires GEMINI_API_KEY to be set.")
+
+    voice = os.getenv("GEMINI_LIVE_VOICE", "Charon")
+    model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-2.5-flash-native-audio-preview-12-2025")
+
+    return GeminiLiveLLMService(
+        api_key=api_key,
+        inference_on_context_initialization=False,
+        settings=GeminiLiveLLMService.Settings(
+            model=model,
+            voice=voice,
+            system_instruction=(
+                "You are a friendly AI assistant. Respond naturally and keep your "
+                "answers conversational."
+            ),
+        ),
     )
 
-    processors = [
-        transport.input(),
-        RealtimeInputControlProcessor(),
-        stt,
-        user_aggregator,
-        llm,
-        tts,
-    ]
+
+async def run_bot_session(
+    transport: BaseTransport,
+    transport_kind: Literal["browser", "esp32"],
+    handle_sigint: bool = False,
+):
+    voice_route = CURRENT_VOICE_ROUTE
+    logger.info(f"Starting bot session for {transport_kind} via route={voice_route}")
+
+    context = LLMContext()
+    if voice_route == "gem_live":
+        llm = create_gemini_live_service()
+        user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
+        processors = [
+            transport.input(),
+            RealtimeInputControlProcessor(voice_route),
+            user_aggregator,
+            llm,
+        ]
+    else:
+        stt, llm, tts = create_classic_services()
+        user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+            context,
+            user_params=LLMUserAggregatorParams(
+                vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=1))
+            ),
+        )
+        processors = [
+            transport.input(),
+            RealtimeInputControlProcessor(voice_route),
+            stt,
+            user_aggregator,
+            llm,
+            tts,
+        ]
 
     if transport_kind in {"esp32", "browser"}:
         processors.append(RealtimeOutputControlProcessor())

@@ -16,9 +16,20 @@ This workspace now exposes two access paths to the same Pipecat bot logic:
 
 2. Add your API keys to `.env`:
 
+   Classic route:
    - `DEEPGRAM_API_KEY`
    - `OPENAI_API_KEY`
    - `CARTESIA_API_KEY`
+
+   Gemini Live route:
+   - `GEMINI_API_KEY`
+
+   Route selection:
+   - `CURRENT_VOICE_ROUTE=classic` or `CURRENT_VOICE_ROUTE=gem_live`
+
+   Optional Gemini Live settings:
+   - `GEMINI_LIVE_MODEL`
+   - `GEMINI_LIVE_VOICE`
 
 3. Install dependencies:
 
@@ -47,5 +58,8 @@ This workspace now exposes two access paths to the same Pipecat bot logic:
 - The ESP32 route accepts raw PCM audio input and returns Opus packets over WSS.
 - The ESP32 route also emits JSON control messages such as `RESPONSE.CREATED`,
   `AUDIO.COMMITTED`, and `RESPONSE.COMPLETE`.
+- `CURRENT_VOICE_ROUTE=classic` uses `Deepgram + OpenAI + Cartesia`.
+- `CURRENT_VOICE_ROUTE=gem_live` uses Pipecat `GeminiLiveLLMService` for native
+  speech-to-speech.
 - The included [Dockerfile](/Users/akashdeepdeb/Desktop/Projects/pipecat-test/Dockerfile) is
   set up for generic container hosting of this FastAPI app.
