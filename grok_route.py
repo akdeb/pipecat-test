@@ -10,8 +10,7 @@ from pipecat.processors.aggregators.llm_response_universal import LLMContextAggr
 
 def build_grok_route(input_processor, context: LLMContext):
     try:
-        from pipecat.services.grok.realtime import GrokRealtimeLLMService
-        from pipecat.services.grok.realtime.events import (
+        from pipecat.services.xai.realtime.events import (
             AudioConfiguration,
             AudioInput,
             AudioOutput,
@@ -19,6 +18,7 @@ def build_grok_route(input_processor, context: LLMContext):
             SessionProperties,
             TurnDetection,
         )
+        from pipecat.services.xai.realtime.llm import GrokRealtimeLLMService
     except Exception as exc:
         raise RuntimeError(
             "Grok route requires pipecat-ai[grok]. Add the grok extra and redeploy."
