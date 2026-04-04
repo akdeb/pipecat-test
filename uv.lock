@@ -2356,7 +2356,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pipecat-ai", extras = ["webrtc", "websocket", "silero", "deepgram", "openai", "cartesia", "google", "runner"] },
+    { name = "pipecat-ai", extras = ["webrtc", "websocket", "silero", "deepgram", "openai", "cartesia", "google", "grok", "runner"] },
     { name = "pipecat-ai-cli" },
 ]
 

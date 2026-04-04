@@ -12,6 +12,7 @@ from typing import Literal
 from classic_route import build_classic_route
 from dotenv import load_dotenv
 from gem_live_route import build_gem_live_route
+from grok_route import build_grok_route
 from loguru import logger
 
 logger.info("Loading Silero VAD model...")
@@ -149,6 +150,8 @@ async def run_bot_session(
     input_processor = RealtimeInputControlProcessor(voice_route)
     if voice_route == "gem_live":
         route_processors, assistant_aggregator = build_gem_live_route(input_processor, context)
+    elif voice_route == "grok":
+        route_processors, assistant_aggregator = build_grok_route(input_processor, context)
     else:
         route_processors, assistant_aggregator = build_classic_route(input_processor, context)
 
@@ -174,7 +177,7 @@ async def run_bot_session(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info(f"{transport_kind} client connected")
-        if voice_route == "gem_live":
+        if voice_route in {"gem_live", "grok"}:
             context.add_message(
                 {
                     "role": "user",

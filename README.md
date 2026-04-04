@@ -24,12 +24,18 @@ This workspace now exposes two access paths to the same Pipecat bot logic:
    Gemini Live route:
    - `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 
+   Grok route:
+   - `XAI_API_KEY`
+
    Route selection:
-   - `CURRENT_VOICE_ROUTE=classic` or `CURRENT_VOICE_ROUTE=gem_live`
+   - `CURRENT_VOICE_ROUTE=classic` or `CURRENT_VOICE_ROUTE=gem_live` or `CURRENT_VOICE_ROUTE=grok`
 
    Optional Gemini Live settings:
    - `GEMINI_LIVE_MODEL`
    - `GEMINI_LIVE_VOICE`
+
+   Optional Grok settings:
+   - `GROK_VOICE`
 
 3. Install dependencies:
 
@@ -61,7 +67,10 @@ This workspace now exposes two access paths to the same Pipecat bot logic:
 - `CURRENT_VOICE_ROUTE=classic` uses `Deepgram + OpenAI + Cartesia`.
 - `CURRENT_VOICE_ROUTE=gem_live` uses Pipecat `GeminiLiveLLMService` for native
   speech-to-speech.
+- `CURRENT_VOICE_ROUTE=grok` uses Pipecat `GrokRealtimeLLMService` for native
+  speech-to-speech.
 - Route builders are split into [classic_route.py](/Users/akashdeepdeb/Desktop/Projects/pipecat-test/classic_route.py)
-  and [gem_live_route.py](/Users/akashdeepdeb/Desktop/Projects/pipecat-test/gem_live_route.py).
+  and [gem_live_route.py](/Users/akashdeepdeb/Desktop/Projects/pipecat-test/gem_live_route.py),
+  plus [grok_route.py](/Users/akashdeepdeb/Desktop/Projects/pipecat-test/grok_route.py).
 - The included [Dockerfile](/Users/akashdeepdeb/Desktop/Projects/pipecat-test/Dockerfile) is
   set up for generic container hosting of this FastAPI app.
