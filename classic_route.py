@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from character_prompt import LANGUAGE_LEARNING_PAL_PROMPT
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -29,10 +30,7 @@ def build_classic_route(input_processor, context: LLMContext):
     llm = OpenAILLMService(
         api_key=os.getenv("OPENAI_API_KEY"),
         settings=OpenAILLMService.Settings(
-            system_instruction=(
-                "You are a friendly AI assistant. Respond naturally and keep your "
-                "answers conversational."
-            ),
+            system_instruction=LANGUAGE_LEARNING_PAL_PROMPT,
         ),
     )
 

@@ -619,10 +619,10 @@ void WIFIMANAGER::attachWebServer(WebServer * srv) {
     response->print(portalUrl);
     response->print(F("\" />"
                       "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />"
-                      "<title>ELATO Setup</title>"
+                      "<title>MYPHOENYX Setup</title>"
                       "<style>body{font-family:sans-serif;text-align:center;margin:40px;}a{color:#2563eb;}</style>"
                       "</head><body>"
-                      "<h1>ELATO Wi-Fi Setup</h1>"
+                      "<h1>MYPHOENYX Wi-Fi Setup</h1>"
                       "<p>Redirecting to the configuration portal...</p>"
                       "<p><a href=\""));
     response->print(portalUrl);
@@ -961,7 +961,7 @@ void WIFIMANAGER::attachUI() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YOUR ELATO 😊</title>
+    <title>MY PHOENYX 😊</title>
     <style>
         :root {
             --primary-color: #2563eb;
@@ -1143,7 +1143,7 @@ void WIFIMANAGER::attachUI() {
 <body>
     <div class="container">
         <div class="card">
-            <h1>YOUR ELATO DEVICE 😊</h1>
+            <h1>MYPHOENYX DEVICE 😊</h1>
             <div id="status"></div>
             <button onclick="scanNetworks()">Scan for Networks</button>
             <button onclick="showConnectModal()">Manual Connect</button>
