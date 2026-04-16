@@ -18,6 +18,7 @@ extern unsigned long scheduledTime;
 extern unsigned long speakingStartTime;
 
 extern int currentVolume;
+extern float currentMicGain;
 extern const int CHANNELS;         // Mono
 extern const int BITS_PER_SAMPLE; // 16-bit audio
 

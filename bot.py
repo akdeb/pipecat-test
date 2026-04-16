@@ -133,6 +133,7 @@ def create_esp32_auth_message() -> dict:
         "type": "auth",
         "volume_control": int(os.getenv("ESP32_DEFAULT_VOLUME", "80")),
         "pitch_factor": float(os.getenv("ESP32_DEFAULT_PITCH_FACTOR", "1.0")),
+        "mic_gain": float(os.getenv("ESP32_DEFAULT_MIC_GAIN", "1.5")),
         "is_ota": False,
         "is_reset": False,
     }

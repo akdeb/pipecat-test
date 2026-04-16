@@ -24,6 +24,7 @@ unsigned long speakingStartTime = 0;
 
 // AUDIO SETTINGS
 int currentVolume = 70;
+float currentMicGain = 1.5f;
 float currentPitchFactor = 1.0f;
 const int CHANNELS = 1;         // Mono
 const int BITS_PER_SAMPLE = 16; // 16-bit audio
@@ -207,8 +208,68 @@ public:
 };
 
 WebsocketStream wsStream; //guard with wsMutex
+class MicGainStream : public Print {
+public:
+    explicit MicGainStream(Print& output) : _output(output) {}
+
+    size_t write(uint8_t b) override {
+        return _output.write(b);
+    }
+
+    size_t write(const uint8_t *buffer, size_t size) override {
+        if (size == 0) {
+            return 0;
+        }
+
+        if (currentMicGain <= 1.001f || size < sizeof(int16_t)) {
+            return _output.write(buffer, size);
+        }
+
+        uint8_t scratch[256];
+        size_t written = 0;
+        size_t offset = 0;
+
+        while (offset < size) {
+            size_t chunk_size = min(sizeof(scratch), size - offset);
+            if (chunk_size & 1) {
+                chunk_size -= 1;
+            }
+            if (chunk_size == 0) {
+                break;
+            }
+
+            memcpy(scratch, buffer + offset, chunk_size);
+
+            int16_t *samples = reinterpret_cast<int16_t *>(scratch);
+            size_t sample_count = chunk_size / sizeof(int16_t);
+            for (size_t i = 0; i < sample_count; ++i) {
+                float scaled = samples[i] * currentMicGain;
+                if (scaled > 32767.0f) {
+                    scaled = 32767.0f;
+                } else if (scaled < -32768.0f) {
+                    scaled = -32768.0f;
+                }
+                samples[i] = static_cast<int16_t>(scaled);
+            }
+
+            written += _output.write(scratch, chunk_size);
+            offset += chunk_size;
+        }
+
+        if (offset < size) {
+            written += _output.write(buffer + offset, size - offset);
+        }
+
+        return written;
+    }
+
+private:
+    Print& _output;
+};
+
+MicGainStream micGainStream(wsStream);
 I2SStream i2sInput; //access from micTask only
-StreamCopy micToWsCopier(wsStream, i2sInput);
+StreamCopy micToWsCopier(micGainStream, i2sInput);
 volatile bool i2sInputFlushScheduled = false;
 const int MIC_COPY_SIZE = 64;
 
@@ -281,6 +342,7 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
         if (strcmp((char*)type.c_str(), "auth") == 0) {
             currentVolume = doc["volume_control"].as<int>();
             currentPitchFactor = doc["pitch_factor"].as<float>();
+            currentMicGain = doc["mic_gain"].is<float>() ? doc["mic_gain"].as<float>() : 1.5f;
 
             bool is_ota = doc["is_ota"].as<bool>();
             bool is_reset = doc["is_reset"].as<bool>();
@@ -288,6 +350,7 @@ void webSocketEvent(WStype_t type, uint8_t *payload, size_t length)
             // Update volumes on both streams
             volume.setVolume(currentVolume / 100.0f);
             volumePitch.setVolume(currentVolume / 100.0f);
+            Serial.printf("Mic gain set to %.2f\n", currentMicGain);
             
             // Only initialize pitch shift if needed
             if (currentPitchFactor != 1.0f) {
