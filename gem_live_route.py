@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 
 from character_prompt import LANGUAGE_LEARNING_PAL_PROMPT
+from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     Frame,
     UserStartedSpeakingFrame,
@@ -13,7 +15,10 @@ from pipecat.frames.frames import (
     VADUserStoppedSpeakingFrame,
 )
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 
@@ -59,7 +64,19 @@ def build_gem_live_route(input_processor, context: LLMContext):
         ),
     )
 
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(
+                params=VADParams(
+                    confidence=0.6,
+                    start_secs=0.1,
+                    stop_secs=0.5,
+                    min_volume=0.45,
+                )
+            )
+        ),
+    )
     turn_boundary_processor = GeminiTurnBoundaryProcessor()
     processors = [
         input_processor,
