@@ -9,6 +9,7 @@
 import os
 from typing import Literal
 
+import numpy as np
 from classic_route import build_classic_route
 from dotenv import load_dotenv
 from gem_live_route import build_gem_live_route
@@ -25,6 +26,7 @@ from pipecat.frames.frames import (
     EmulateUserStoppedSpeakingFrame,
     ErrorFrame,
     Frame,
+    InputAudioRawFrame,
     InputTransportMessageFrame,
     InterruptionFrame,
     LLMContextFrame,
@@ -47,6 +49,7 @@ logger.info("All components loaded successfully")
 
 load_dotenv(override=True)
 CURRENT_VOICE_ROUTE = os.getenv("CURRENT_VOICE_ROUTE", "classic").strip().lower()
+SERVER_INPUT_AUDIO_GAIN = float(os.getenv("SERVER_INPUT_AUDIO_GAIN", "1.0"))
 
 
 class RealtimeInputControlProcessor(FrameProcessor):
@@ -128,12 +131,41 @@ class RealtimeOutputControlProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+class InputAudioGainProcessor(FrameProcessor):
+    """Apply optional server-side gain to incoming PCM before VAD/STT."""
+
+    def __init__(self, gain: float):
+        super().__init__()
+        self._gain = max(1.0, gain)
+        if self._gain > 1.0:
+            logger.info("Server input audio gain enabled: {:.2f}x", self._gain)
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if (
+            self._gain > 1.0
+            and direction is FrameDirection.DOWNSTREAM
+            and isinstance(frame, InputAudioRawFrame)
+        ):
+            samples = np.frombuffer(frame.audio, dtype=np.int16)
+            boosted = np.clip(samples.astype(np.float32) * self._gain, -32768, 32767).astype(
+                np.int16
+            )
+            frame = InputAudioRawFrame(
+                audio=boosted.tobytes(),
+                sample_rate=frame.sample_rate,
+                num_channels=frame.num_channels,
+            )
+
+        await self.push_frame(frame, direction)
+
+
 def create_esp32_auth_message() -> dict:
     return {
         "type": "auth",
         "volume_control": int(os.getenv("ESP32_DEFAULT_VOLUME", "80")),
         "pitch_factor": float(os.getenv("ESP32_DEFAULT_PITCH_FACTOR", "1.0")),
-        "mic_gain": float(os.getenv("ESP32_DEFAULT_MIC_GAIN", "1.5")),
         "is_ota": False,
         "is_reset": False,
     }
@@ -148,6 +180,7 @@ async def run_bot_session(
     logger.info(f"Starting bot session for {transport_kind} via route={voice_route}")
 
     context = LLMContext()
+    gain_processor = InputAudioGainProcessor(SERVER_INPUT_AUDIO_GAIN)
     input_processor = RealtimeInputControlProcessor(voice_route)
     if voice_route == "gem_live":
         route_processors, assistant_aggregator = build_gem_live_route(input_processor, context)
@@ -156,7 +189,7 @@ async def run_bot_session(
     else:
         route_processors, assistant_aggregator = build_classic_route(input_processor, context)
 
-    processors = [transport.input(), *route_processors]
+    processors = [transport.input(), gain_processor, *route_processors]
 
     if transport_kind in {"esp32", "browser"}:
         processors.append(RealtimeOutputControlProcessor())
