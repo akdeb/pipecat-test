@@ -5,13 +5,37 @@ from __future__ import annotations
 import os
 
 from character_prompt import LANGUAGE_LEARNING_PAL_PROMPT
+from pipecat.frames.frames import (
+    Frame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
+)
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+
+class GeminiTurnBoundaryProcessor(FrameProcessor):
+    """Bridge generic user turn frames into explicit Gemini VAD boundary frames."""
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if direction is FrameDirection.DOWNSTREAM:
+            if isinstance(frame, UserStartedSpeakingFrame):
+                await self.push_frame(VADUserStartedSpeakingFrame(), direction)
+            elif isinstance(frame, UserStoppedSpeakingFrame):
+                await self.push_frame(VADUserStoppedSpeakingFrame(), direction)
+
+        await self.push_frame(frame, direction)
 
 
 def build_gem_live_route(input_processor, context: LLMContext):
     try:
         from pipecat.services.google.gemini_live import GeminiLiveLLMService
+        from pipecat.services.google.gemini_live.llm import GeminiVADParams
     except Exception as exc:
         raise RuntimeError(
             "Gemini Live route requires pipecat-ai[google]. Add the google extra and redeploy."
@@ -31,13 +55,16 @@ def build_gem_live_route(input_processor, context: LLMContext):
             model=model,
             voice=voice,
             system_instruction=LANGUAGE_LEARNING_PAL_PROMPT,
+            vad=GeminiVADParams(disabled=True),
         ),
     )
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
+    turn_boundary_processor = GeminiTurnBoundaryProcessor()
     processors = [
         input_processor,
         user_aggregator,
+        turn_boundary_processor,
         llm,
     ]
 
